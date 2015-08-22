@@ -1,0 +1,330 @@
+---
+title: "SparkR - distributed computing in R using Spark clusters"
+author: "Gjeltema"
+date: "August 20, 2015"
+output: html_document
+---
+
+Presentation on SparkR:  
+
+1. Overview of the Hadoop Ecosystem and how Spark fits in  
+2. Purpose, use cases, and high-level architecture of Spark  
+3. SparkR - the frontend to use Spark in R  
+4. Spark DataFrames  
+5. Interactive demo of SparkR in RStudio [this document]  
+
+# Required Software  
+To get started, we need to install some software.  
+
+* **Java**: for instance, Oracle's Java Developer Kit (JDK) is available at 
+[java.com](https://java.com/en/download/manual.jsp). 
+Ensure that the version you download matches your OS. 
+If your OS is 64 bit, then download the 64 bit version.   
+* Spark: available at 
+[spark.apache.org](https://spark.apache.org/downloads.html). 
+From version 1.4 on, SparkR is included in Spark.   
+* R: available at [r-project.org](https://www.r-project.org/).  
+* RStudio [optional]: available at [rstudio.com](https://www.rstudio.com/).  
+
+We'll be doing our analysis using R 3.2.2 in RStudio 0.99.473 with Spark 1.4.1 
+(released on July 15, 2015, pre-built for Hadoop 2.6 and later). 
+The OS is Linux Ubuntu 14.04.  
+
+Windows users: please see 
+http://www.r-bloggers.com/installing-and-starting-sparkr-locally-on-windows-os-and-rstudio/ .  
+Mac users: you are on your own.
+
+# Running R Scripts from the Terminal (in Ubuntu)
+
+## R API - launch SparkR  
+Spark 1.4 (and up) provides an experimental R API. To run Spark interactively in
+an R interpreter, open a terminal and navigate to your Spark folder. (For
+instance, it could be named `spark-1.4.1` in your `/home/` directory, thus type
+`cd spark-1.4.1` to step into the folder.) Then type 
+`./bin/sparkR --master local[2]` to start an R console and to launch Spark from
+within.  
+
+## R Examples - execute R script in SparkR
+Spark 1.4 (and up) provides sample applications in R. For example, the script 
+`dataframe.R` creates Spark DataFrames and runs SQL queries. Open a terminal
+and navigate to your Spark folder. Type 
+`./bin/spark-submit examples/src/main/r/dataframe.R` to execute the script in 
+the terminal.
+
+# Running SparkR in RStudio
+
+## Setup in RStudio
+We point to crucial software and libraries and install several packages. First, we install (if not installed already) and load the non-Spark-related packages that will be used:
+```{r}
+mypkgs <- c("dplyr", "ggplot2", "magrittr");
+```
+```{r, eval=FALSE}
+install.packages(mypkgs)
+```
+```{r}
+invisible(
+  sapply(mypkgs, function(onepkg) {library(onepkg, character.only = TRUE)})
+)
+rm(mypkgs)
+```
+
+We let R know where our Java software is located and install a Java package for R.
+```{r, eval=FALSE}
+install.packages("rJava")
+```
+
+```{r}
+Sys.setenv(JAVA_HOME="/usr/lib/jvm/default-java/jre") # my path in Linux Ubuntu
+library("rJava")
+```
+
+For Ubuntu users: It you get an error message upon installing the package or 
+if `library("rJava")` shows an error messsage, the installation of rJava was 
+not successful. Try installing it in the terminal with 
+`sudo apt-get install r-cran-rjava`.   
+
+Similarly, we load the SparkR package and let R know where to find Spark.  
+
+```{r, eval=FALSE}
+mySparkRpackagepath <- "/home/myusername/spark-1.4.1-bin-hadoop2.6.tgz" # my path in Linux
+install.packages(mySparkRpackagepath)
+library("SparkR", lib.loc="/home/myusername/spark-1.4.1-bin-hadoop2.6/R/lib") # my path in Linux
+```
+Alternatively, we can move the SparkR package from our Spark subfolder `/R/lib`  
+inro our standard R library folder and load it from there.  
+```{r}
+library("SparkR")
+```
+Note: The order of loading some of the packages is important. First, package
+`dplyr` was loaded, then `SparkR`. Several of dplyr's functions were re-written
+in SparkR.
+
+`SPARK_HOME` specifies the folder Spark is installed in. 
+```{r}
+Sys.setenv(SPARK_HOME="/home/myusername/spark-1.4.1-bin-hadoop2.6") # my path in Linux
+```
+
+
+A list of packages (some under development, some released) for Apache Spark can
+be found on [spark-packages.org](http://spark-packages.org).
+
+
+## How to start and stop SparkR  
+Note that once you stop SparkR, you cannot restart it again in the same R session.  
+```{r initandstopSpark, eval=FALSE}
+## not run:
+
+# initalize a new Spark Context, i.e., connect R to Spark;
+# runs on localhost by default;
+# one can also specify 'sparkHome' here instead of setting 'SPARK_HOME' above;
+sc <- sparkR.init(master = "local", appName = "SparkR_demo_RTA", 
+                  sparkHome = "/home/myusername/spark-1.4.1-bin-hadoop2.6")
+
+# initalize a new SQLContext so we can work with DataFrames
+sqlContext <- sparkRSQL.init(sc)
+
+# or initalize a new HiveContext; inherits from SQLContext and adds support
+# for finding tables in the MetaStore and writing queries using HiveQL
+hiveContext <- sparkRHive.init(sc)
+
+# stop the Spark Context
+sparkR.stop()
+```
+
+
+## Examples  
+### Launch Spark
+After getting everything into place, it is time to launch Spark.
+```{r initSpark}
+sc <- sparkR.init(master = "local[2]", appName = "SparkR_demo_RTA", 
+# we will need the databricks Spark package in example 2
+                  sparkPackages = "com.databricks:spark-csv_2.10:1.0.3")
+sc
+
+sqlContext <- sparkRSQL.init(sc)
+sqlContext
+```
+
+For now, we will cover reading SQL, Parquet, and JSON files.  
+
+### Example 1: creating a Spark DataFrame  
+Slight modification of the example that comes with Spark, 
+see `examples/src/main/r/dataframe.R`.  
+
+We create distributed Spark DataFrames that have a syntax that is very similar 
+to data.frames.  
+
+#### Creating a Spark DataFrame from a local R data.frame
+```{r example1}
+# Create a simple local data.frame
+personLocalDF <- data.frame(name = c("John", "Smith", "Sarah"), 
+                            age = c(19, 23, 18))
+
+# Convert local R data frame to a Spark DataFrame
+personDF <- createDataFrame(sqlContext, personLocalDF)
+
+# Inspect the data structure
+class(personDF)
+str(personDF)
+
+# Print its schema
+printSchema(personDF) 
+
+# Show part of the data
+head(personDF)
+```
+#### Creating a Spark DataFrame from a JSON file
+```{r}
+# Create a DataFrame from a JSON file
+path <- file.path(Sys.getenv("SPARK_HOME"), 
+                  "examples/src/main/resources/people.json")
+peopleDF <- jsonFile(sqlContext, path)
+# or alternatively
+#peopleDF <- read.df(sqlContext, path, "json")
+
+printSchema(peopleDF)
+head(peopleDF)
+```
+#### Creating a temporary table for SQL queries
+```{r}
+# Register this DataFrame as a table
+registerTempTable(peopleDF, "people")
+
+# SQL statements can be run by using the sql methods provided by sqlContext
+teenagers <- sql(sqlContext, 
+                 "SELECT name FROM people WHERE age >= 13 AND age <= 19")
+
+# Drop the temporary table
+dropTempTable(sqlContext, "people")
+
+# Call collect to get a local data.frame from the DataFrame
+teenagersLocalDF <- collect(teenagers)
+
+# Print the teenagers in our dataset 
+print(teenagersLocalDF)
+```
+
+### Example 2: operating on a DataFrame
+Based on
+https://databricks.com/blog/2015/06/09/announcing-sparkr-r-on-spark.html and
+http://blog.sense.io/running-spark-sparkr-pyspark/.  
+
+First, download the nyc flights dataset as a CSV from 
+https://s3-us-west-2.amazonaws.com/sparkr-data/nycflights13.csv.  
+
+Spark DataFrame operations such as filtering, grouping, aggregating, summary
+statistics are supported. Operations take advantage of multiple cores/machines
+and thus can scale to larger data than standalone R.
+```{r example2}
+# Load the flights CSV file using `read.df`. Note that we use the CSV reader 
+# Spark package here.
+flights <- read.df(sqlContext, 
+                   path = "/home/myusername/SparkR-talk/nycflights13.csv",
+                   "com.databricks.spark.csv", header = "true")
+
+# Print the first few rows
+head(flights)
+
+# Run a query to print the top 5 most frequent destinations from JFK:
+# Filter by airport
+jfk_flights <- filter(flights, flights$origin == "JFK")
+
+# Group the flights by destination and aggregate by the number of flights
+dest_flights <- agg(group_by(jfk_flights, jfk_flights$dest), 
+                    count = n(jfk_flights$dest))
+
+# Now sort by the `count` column and print the first few rows
+head(arrange(dest_flights, desc(dest_flights$count)), n = 5)
+
+# The above analysis written with pipes
+dest_flights <- 
+  filter(flights, flights$origin == "JFK") %>% 
+  group_by(flights$dest) %>% 
+  summarize(count = n(flights$dest));
+arrange(dest_flights, desc(dest_flights$count)) %>% 
+  head(n = 5);
+
+# Save them in a local data.frame
+destflightsLocalDF <- collect(dest_flights)
+```
+
+#### Functions on DataFrames  
+Several functions are available for Spark DataFrames. Notice the similarity to 
+existing R functions.  
+```{r}
+cache(jfk_flights)
+printSchema(jfk_flights)
+head(jfk_flights)
+columns(jfk_flights)
+names(jfk_flights)
+count(jfk_flights)
+# Select specific columns - note the quotes around the column names
+destDF <- select(jfk_flights, "dest", "tailnum", "carrier")
+# Store the results
+## not run
+#write.df(dest_flights, "jfk_flights_by_dest", "com.databricks.spark.csv", 
+#         mode = "overwrite")
+
+```
+
+#### SQL queries on DataFrames  
+Registering the DataFrame as temporary table allows us to manipulate it with a 
+simple SQL interface.  
+```{r}
+registerTempTable(jfk_flights, "flights_table")
+
+# Flights to RDU where we the delay at JFK is longer than 
+# the arrival delay to RDU
+destDF2 <- sql(sqlContext, "SELECT dest, 
+               tailnum, 
+               carrier FROM flights_table WHERE dest = 'RDU' and dep_delay > arr_delay")
+count(destDF2)
+
+# Flights to RDU where we the delay at JFK is shorter than 
+# the arrival delay to RDU
+destDF3 <- sql(sqlContext, "SELECT dest, 
+               tailnum, 
+               carrier FROM flights_table WHERE dest = 'RDU' and dep_delay <= arr_delay")
+count(destDF3)
+
+# Create local dara.frame from SQL query
+jfk_to_rduLocalDF <- sql(sqlContext, 
+  "SELECT hour as departureHour,
+  arr_delay as arrivalDelay, 
+  dep_delay as departureDelay, 
+  carrier FROM flights_table WHERE dest = 'RDU'") %>% 
+  collect;
+
+dropTempTable(sqlContext, "flights_table")
+
+# delays on flights from JFK RDU by departure time
+jfk_to_rduLocalDF %>%
+  dplyr::mutate(departureHour = as.integer(departureHour),
+                arrivalDelay = as.integer(arrivalDelay),
+                departureDelay = as.integer(departureDelay)) %>%
+  na.omit() %>%
+  dplyr::group_by(departureHour) %>%
+  dplyr::mutate(avgArrivalDelay = mean(arrivalDelay)) %>%
+  # plot the delays so we know when to fly to RDU
+  ggplot(aes(x=departureHour, y=avgArrivalDelay, color=carrier)) +
+  geom_point() +
+  scale_color_discrete(name="Carrier") +
+  labs(x="Departure Time (in h)", 
+       y="Average Arrival Delay (in min)",
+       title="Flight delays from JFK to RDU");
+```
+
+### Stop Spark
+When we are done, we terminate SparkR.  
+```{r stopSpark}
+# Stop the SparkContext now
+sparkR.stop()
+```
+
+# Resources and References
+https://spark.apache.org/docs/latest/sparkr.html the SparkR documentation  
+http://ampcamp.berkeley.edu/5/exercises/ big data bootcamp with Spark exercises   
+http://sparkhub.databricks.com/ a community site for Spark  
+http://www.r-bloggers.com/?s=spark a blog on R  
+https://spark-summit.org/ the Spark conference, contains slides and videos of the talks  
+https://gist.github.com/shivaram  SparkR code examples   
